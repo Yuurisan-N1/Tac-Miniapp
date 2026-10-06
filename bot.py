@@ -14,7 +14,7 @@ RED    = "\033[91m"
 GREEN  = "\033[92m"
 YELLOW = "\033[93m"
 
-MY_PROJECT = "TAC AirDrop Miniapp"
+MY_PROJECT = "Tac Miniapp"
 BASE_URL   = "https://tacairdrop.xyz"
 REF_CODE   = "6004380466"
 
@@ -272,6 +272,41 @@ async def complete_tasks(session, init_data, user_id, tasks, completed_ids, prox
             log_red(f"Task {title} could not be completed.")
 
 
+AD_WINDOW_SECONDS = 21600
+AD_WINDOW_MS = AD_WINDOW_SECONDS * 1000
+AD_LIMIT_FALLBACK = 5
+
+
+def plural(count):
+    return "view" if int(count) == 1 else "views"
+
+
+async def watch_ads(session, init_data, user_id, user, settings, proxy):
+    limit = max(1, int(settings.get("adsDailyLimit") or AD_LIMIT_FALLBACK))
+    watched = int(user.get("adsWatchedToday") or 0)
+    window_started = int(user.get("adsWindowStartedAt") or 0)
+    if not window_started or int(time.time() * 1000) - window_started >= AD_WINDOW_MS:
+        watched = 0
+    remaining = max(0, limit - watched)
+    if remaining <= 0:
+        log_yellow("Every rewarded ad view for this window was already watched.")
+        return
+    for index in range(remaining):
+        status, data = await api_post(session, "/api/ads/watch", {}, init_data, proxy)
+        if status == 200 and data and data.get("reward") is not None:
+            left = data.get("adsRemaining")
+            if left is None:
+                left = remaining - index - 1
+            log_green(f"Rewarded ad view credited {data.get('reward')} TAC with {left} {plural(left)} left.")
+            continue
+        reason = error_text(data)
+        if reason:
+            log_yellow(f"Rewarded ad view says: {reason}.")
+        else:
+            log_yellow("Rewarded ad view was refused by the server.")
+        return
+
+
 async def claim_referral(session, init_data, user_id, proxy):
     status, data = await api_post(session, "/api/referrals/claim", {"userId": user_id}, init_data, proxy)
     if data and data.get("success"):
@@ -366,6 +401,14 @@ async def process_account(init_data, address, user_id, username, proxy, upgrade)
             user_id,
             state.get("tasks", []),
             set(user.get("completedTaskIds") or []),
+            proxy,
+        )
+        await watch_ads(
+            session,
+            init_data,
+            user_id,
+            user,
+            state.get("settings") or {},
             proxy,
         )
         await claim_referral(session, init_data, user_id, proxy)
